@@ -642,7 +642,32 @@ MODULES.push({
    {k:"beds",            lab:"staffed beds", unit:"bed",
     axis:"staffed beds", step:"1 more", dp:0}
   ];
-  let xi=0, showRes=true, b0u=null, b1u=null;
+  let xi=0, showRes=true, level=0, slope=0, best=-Infinity;
+
+  /* the student's line, held as a height at the average x plus a tilt, so the two
+     controls behave the same way whatever scale the predictor happens to be on */
+  function mine(){ const F=fit(); return {b1:slope, b0:level-slope*F.mx}; }
+  function myFit(){
+    const F=fit(), B=mine();
+    let sse=0, mae=0, ssr=0;
+    for(let i=0;i<F.n;i++){
+      const yh=B.b0+B.b1*F.x[i], e=F.y[i]-yh;
+      sse+=e*e; mae+=Math.abs(e); ssr+=(yh-F.my)*(yh-F.my);
+    }
+    /* ssr is the real sum of squared (yhat - ybar). It equals SST - SSE only when the line
+       is the least-squares one, which is exactly what makes that line special. */
+    return {b0:B.b0,b1:B.b1,sse,mae:mae/F.n,r2:1-sse/F.sst,
+            se:Math.sqrt(sse/(F.n-2)),ssr,gap:F.sst-sse-ssr};
+  }
+  function reset(){
+    const F=fit(), sy=sdS(F.y), sx=sdS(F.x), smax=3*sy/sx;
+    level=F.my; slope=0; best=-Infinity;
+    sLevel.input.min=F.my-3*sy; sLevel.input.max=F.my+3*sy; sLevel.input.step=sy/150;
+    sSlope.input.min=-smax; sSlope.input.max=smax; sSlope.input.step=smax/400;
+    sLevel.set(level); sSlope.set(slope);
+    go();
+  }
+  function track(){ const r=myFit().r2; if(r>best) best=r; }
 
   const X=()=>D[XS[xi].k];
   function fit(){
@@ -663,73 +688,74 @@ MODULES.push({
             df,se_e,seb1,t,p,lo:b1-tc*seb1,hi:b1+tc*seb1,mae,sxx,
             seb0,t0,p0,lo0:b0-tc*seb0,hi0:b0+tc*seb0,adj,F,tc};
   }
-  const sseOf=(b0,b1)=>{const x=X(); let s=0;
-    for(let i=0;i<x.length;i++){const e=Y[i]-(b0+b1*x[i]); s+=e*e;} return s;};
   const pTxt=p=>p<0.0001?"< 0.0001":p.toFixed(4);
 
-  /* ---------------- 1. the line ---------------- */
+  /* ---------------- 1. find the line yourself ---------------- */
   const lab1=el("div","lab");
-  sect(lab1,1,"The line through the cloud");
+  sect(lab1,1,"Find the line yourself");
   const pick=el("div","ctrls"); pick.style.borderTop="0"; pick.style.background="transparent";
   const pc=el("div","ctrl"); pc.style.gridColumn="1/-1";
   pc.append(el("label",null,"<span>Predict 30-day readmission rate from…</span>"));
   const prow=el("div","btnrow"); prow.style.marginTop="8px";
-  XS.forEach((s,i)=>{ const b=el("button","b"+(i===0?" on":""),s.lab);
-    b.addEventListener("click",()=>{xi=i;b0u=b1u=null;
-      [...prow.children].forEach((x,j)=>x.classList.toggle("on",j===i)); go();});
+  XS.forEach((sx,k)=>{ const b=el("button","b"+(k===0?" on":""),sx.lab);
+    b.addEventListener("click",()=>{xi=k;
+      [...prow.children].forEach((e,m)=>e.classList.toggle("on",m===k)); reset(); });
     prow.append(b); });
   pc.append(prow); pick.append(pc); lab1.append(pick);
 
-  const fig=el("div","figwrap"); lab1.append(fig);
-  const cv=makeCanvas(fig,0.52,(c,W,H)=>{
-    const F=fit(), x=F.x, y=F.y;
+  const P=panel(lab1);
+  const cv=makeCanvas(P.fig,0.62,(c,W,H)=>{
+    const F=fit(), x=F.x, y=F.y, B=mine();
     const xlo=Math.min(...x), xhi=Math.max(...x), ylo=Math.min(...y), yhi=Math.max(...y);
     const px=(xhi-xlo)*0.06, py=(yhi-ylo)*0.10;
-    const fr=frame(c,W,H,[18,18,44,46],[xlo-px,xhi+px],[ylo-py,yhi+py]);
+    const fr=frame(c,W,H,[18,18,44,48],[xlo-px,xhi+px],[ylo-py,yhi+py]);
     fr.grid(6,4,v=>v.toFixed(XS[xi].dp===0?0:1),v=>v.toFixed(0));
     fr.axisLabel(XS[xi].axis);
     c.save(); c.translate(13,(fr.T+fr.B)/2); c.rotate(-Math.PI/2);
     c.fillStyle=css("--text-2"); c.font='600 11.5px "Commissioner",sans-serif';
     c.textAlign="center"; c.textBaseline="middle";
     c.fillText("30-day readmission rate, %",0,0); c.restore();
-
-    const B0=b0u==null?F.b0:b0u, B1=b1u==null?F.b1:b1u;
     fr.clipIn(()=>{
       if(showRes) for(let i=0;i<x.length;i++){
-        c.beginPath(); c.moveTo(fr.X(x[i]),fr.Y(y[i])); c.lineTo(fr.X(x[i]),fr.Y(B0+B1*x[i]));
-        c.strokeStyle=tint("--warn",0.42); c.lineWidth=1; c.stroke();
+        c.beginPath(); c.moveTo(fr.X(x[i]),fr.Y(y[i])); c.lineTo(fr.X(x[i]),fr.Y(B.b0+B.b1*x[i]));
+        c.strokeStyle=tint("--warn",0.45); c.lineWidth=1; c.stroke();
       }
       for(let i=0;i<x.length;i++){
         c.beginPath(); c.arc(fr.X(x[i]),fr.Y(y[i]),3.2,0,7);
         c.fillStyle=tint("--curve",0.55); c.fill();
         c.strokeStyle=css("--curve"); c.lineWidth=.8; c.stroke();
       }
-      /* the least-squares line */
       const a=fr.xd[0], b=fr.xd[1];
-      c.beginPath(); c.moveTo(fr.X(a),fr.Y(F.b0+F.b1*a)); c.lineTo(fr.X(b),fr.Y(F.b0+F.b1*b));
-      c.strokeStyle=css("--sim"); c.lineWidth=(b0u==null?3:1.8);
-      c.setLineDash(b0u==null?[]:[6,5]); c.stroke(); c.setLineDash([]);
-      /* the line the student is dragging, when they have moved it */
-      if(b0u!=null){
-        c.beginPath(); c.moveTo(fr.X(a),fr.Y(B0+B1*a)); c.lineTo(fr.X(b),fr.Y(B0+B1*b));
-        c.strokeStyle=css("--samp"); c.lineWidth=3; c.stroke();
-      }
+      c.beginPath(); c.moveTo(fr.X(a),fr.Y(B.b0+B.b1*a)); c.lineTo(fr.X(b),fr.Y(B.b0+B.b1*b));
+      c.strokeStyle=css("--samp"); c.lineWidth=3.4; c.stroke();
     });
   });
-  legend(lab1,[[css("--sim"),"the least-squares line"],
-    [tint("--curve",0.8),"one hospital","box"],
-    [tint("--warn",0.8),"residual · what the line missed by","box"]]);
 
-  const eqn=el("div","statline"); lab1.append(eqn);
-  const c1=el("div","ctrls"); lab1.append(c1);
-  const sb0=slider(c1,{label:"Your intercept b₀",min:0,max:30,step:0.1,value:13,
-    fmt:v=>v.toFixed(1),on:v=>{b0u=v; if(b1u==null) b1u=fit().b1; go();}});
-  const sb1=slider(c1,{label:"Your slope b₁",min:-3,max:3,step:0.005,value:0,
-    fmt:v=>v.toFixed(3),on:v=>{b1u=v; if(b0u==null) b0u=fit().b0; go();}});
-  buttons(c1,null,[
-    {t:"Snap to the least-squares line",big:true,on:()=>{b0u=b1u=null;go();}},
-    {t:"Residuals on/off",on:()=>{showRes=!showRes;go();}}]);
-  const sseNote=el("p","labnote"); lab1.append(sseNote);
+  const scoreBox=el("div","ctrl"); scoreBox.style.textAlign="center";
+  scoreBox.append(el("div","k","R² of your line"));
+  const bigR=el("div"); bigR.style.cssText=
+    "font-size:var(--fs-1);font-weight:700;letter-spacing:-.03em;line-height:1.05;margin:2px 0 6px";
+  scoreBox.append(bigR);
+  const barOuter=el("div");
+  barOuter.style.cssText="height:9px;border-radius:999px;background:var(--fill-2);overflow:hidden";
+  const barIn=el("div");
+  barIn.style.cssText="height:100%;width:0%;border-radius:999px;transition:width .18s";
+  barOuter.append(barIn); scoreBox.append(barOuter);
+  const bestLine=el("div","k"); bestLine.style.marginTop="8px"; scoreBox.append(bestLine);
+  P.side.append(scoreBox);
+
+  const sLevel=slider(P.side,{label:"Move the line up and down",min:0,max:1,step:0.01,value:0.5,
+    fmt:v=>fmt(v,2),on:v=>{level=v;track();go();}});
+  const sSlope=slider(P.side,{label:"Tilt it",min:-1,max:1,step:0.001,value:0,
+    fmt:v=>fmt(v,XS[xi].dp===0?5:3),on:v=>{slope=v;track();go();}});
+  const sideSt=sideStats(P.side,[["eq","your line","samp"],
+    ["ssr","your SSR \u00b7 explained","sim"],
+    ["sse","your SSE \u00b7 left over","warn"],
+    ["sst","SST \u00b7 the total to beat","sm"]]);
+  buttons(P.side,null,[{t:"Residuals on/off",on:()=>{showRes=!showRes;go();}},
+                       {t:"Start over",on:()=>reset()}]);
+
+  const hint=el("p","labnote"); lab1.append(hint);
   host.append(lab1);
 
   /* ---------------- 2. coefficients ---------------- */
@@ -811,7 +837,8 @@ MODULES.push({
   mc.append(el("label",null,"<span>What are you measuring y against?</span>"));
   const mrow=el("div","btnrow"); mrow.style.marginTop="8px";
   [["mean","just the mean of y \u00b7 SST"],
-   ["line","the fitted line \u00b7 SSE"],
+   ["line","your line \u00b7 SSE"],
+   ["ssr","your line vs the mean \u00b7 SSR"],
    ["one","one hospital, broken down"]].forEach(([k,t],n)=>{
     const b=el("button","b"+(n===0?" on":""),t);
     b.addEventListener("click",()=>{mode=k;[...mrow.children].forEach(x=>x.classList.toggle("on",x===b));go();});
@@ -835,15 +862,19 @@ MODULES.push({
     fr.clipIn(()=>{
       /* the mean line is the model you are beating */
       c.beginPath(); c.moveTo(fr.L,fr.Y(F.my)); c.lineTo(fr.R,fr.Y(F.my));
-      c.strokeStyle=css("--samp"); c.lineWidth=2; c.setLineDash([7,5]); c.stroke(); c.setLineDash([]);
-      const a=fr.xd[0], b=fr.xd[1];
-      c.beginPath(); c.moveTo(fr.X(a),fr.Y(F.b0+F.b1*a)); c.lineTo(fr.X(b),fr.Y(F.b0+F.b1*b));
-      c.strokeStyle=css("--sim"); c.lineWidth=3; c.stroke();
+      c.strokeStyle=css("--sim"); c.lineWidth=2; c.setLineDash([7,5]); c.stroke(); c.setLineDash([]);
+      const a=fr.xd[0], b=fr.xd[1], B=mine();
+      c.beginPath(); c.moveTo(fr.X(a),fr.Y(B.b0+B.b1*a)); c.lineTo(fr.X(b),fr.Y(B.b0+B.b1*b));
+      c.strokeStyle=css("--samp"); c.lineWidth=3; c.stroke();
 
       if(mode!=="one") for(let k=0;k<x.length;k++){
-        const to = mode==="mean" ? F.my : F.b0+F.b1*x[k];
-        c.beginPath(); c.moveTo(fr.X(x[k]),fr.Y(y[k])); c.lineTo(fr.X(x[k]),fr.Y(to));
-        c.strokeStyle=mode==="mean"?tint("--samp",0.5):tint("--warn",0.5);
+        const yh=B.b0+B.b1*x[k];
+        /* SST runs y to the mean, SSE runs y to the line, SSR runs the line to the mean */
+        const from = mode==="ssr" ? yh : y[k];
+        const to   = mode==="sse" || mode==="line" ? yh : F.my;
+        c.beginPath(); c.moveTo(fr.X(x[k]),fr.Y(from)); c.lineTo(fr.X(x[k]),fr.Y(to));
+        c.strokeStyle = mode==="mean" ? tint("--sim",0.5)
+                      : mode==="ssr"  ? tint("--samp",0.65) : tint("--warn",0.5);
         c.lineWidth=1.1; c.stroke();
       }
       for(let k=0;k<x.length;k++){
@@ -854,7 +885,7 @@ MODULES.push({
       }
 
       if(mode==="one"){
-        const X0=x[pi], yi=y[pi], yh=F.b0+F.b1*X0, my=F.my;
+        const B2=mine(), X0=x[pi], yi=y[pi], yh=B2.b0+B2.b1*X0, my=F.my;
         const px0=fr.X(X0), off=14;
         const seg=(x1,ya,yb,colour,lab,fr2,left)=>{
           c.beginPath(); c.moveTo(x1,fr.Y(ya)); c.lineTo(x1,fr.Y(yb));
@@ -871,13 +902,13 @@ MODULES.push({
           c.fillRect(tx-3,ly-7,w+6,14); c.globalAlpha=1;
           c.fillStyle=colour; c.fillText(lab,tx,ly);
         };
-        seg(px0-off, yi, my, css("--samp"), "total "+fmt(yi-my,2), 0.78, true);
+        seg(px0-off, yi, my, css("--sim"), "total "+fmt(yi-my,2), 0.78, true);
         seg(px0,     yi, yh, css("--warn"), "left over "+fmt(yi-yh,2), 0.30);
-        seg(px0+off, yh, my, css("--sim"),  "explained "+fmt(yh-my,2), 0.55);
+        seg(px0+off, yh, my, css("--samp"),  "explained "+fmt(yh-my,2), 0.55);
       }
     });
     c.font='700 11px "Commissioner",sans-serif'; c.textAlign="right"; c.textBaseline="bottom";
-    c.fillStyle=css("--samp"); c.fillText("mean of y = "+fmt(F.my,2),fr.R-4,fr.Y(F.my)-4);
+    c.fillStyle=css("--sim"); c.fillText("mean of y = "+fmt(F.my,2),fr.R-4,fr.Y(F.my)-4);
   });
   cvD.c.style.cursor="pointer";
   cvD.c.addEventListener("click",ev=>{
@@ -894,8 +925,8 @@ MODULES.push({
       [...mrow.children].forEach((x,n)=>x.classList.toggle("on",n===2)); }
     ptS.set(pi+1); go();
   });
-  legend(lab4,[[css("--samp"),"the mean of y \u00b7 the model with no predictor"],
-    [css("--sim"),"the fitted line"],
+  legend(lab4,[[css("--sim"),"the mean of y \u00b7 the model with no predictor"],
+    [css("--samp"),"your line from step 1"],
     [tint("--warn",0.8),"what the line still misses","box"]]);
 
   const pctl=el("div","ctrls");
@@ -903,17 +934,17 @@ MODULES.push({
     value:1,on:v=>{pi=v-1; if(mode!=="one"){mode="one";
       [...mrow.children].forEach((x,n)=>x.classList.toggle("on",n===2));} go();}});
   lab4.append(pctl);
-  const ptRo=readouts(lab4,[["yi","this hospital's y","curve"],["yh","the line's \u0177","sim"],
+  const ptRo=readouts(lab4,[["yi","this hospital's y","curve"],["yh","your line's \u0177","samp"],
     ["my","the mean of y","samp"],["tot","total y \u2212 \u0233","sm"],
     ["exp","explained \u0177 \u2212 \u0233","sm"],["res","left over y \u2212 \u0177","sm"]]);
   const ptNote=el("p","labnote"); lab4.append(ptNote);
 
   const figV=el("div","figwrap"); lab4.append(figV);
   const cvV=makeCanvas(figV,0.20,(c,W,H)=>{
-    const F=fit();
+    const F=fit(), M=myFit();
     const fr=frame(c,W,H,[16,16,34,16],[0,1],[0,1]);
     const L=fr.L,R=fr.R,T=fr.T,B=fr.B, h=B-T;
-    const frac=F.ssr/F.sst, split=L+(R-L)*frac;
+    const frac=Math.max(0,Math.min(1,1-M.sse/F.sst)), split=L+(R-L)*frac;
     c.fillStyle=tint("--sim",0.55); c.fillRect(L,T,split-L,h);
     c.fillStyle=tint("--warn",0.42); c.fillRect(split,T,R-split,h);
     c.strokeStyle=css("--sep"); c.lineWidth=1; c.strokeRect(L,T,R-L,h);
@@ -925,18 +956,18 @@ MODULES.push({
       c.fillText("left over  "+((1-frac)*100).toFixed(1)+"%",(split+R)/2,T+h/2); }
     c.fillStyle=css("--text-2"); c.font='600 11px "Commissioner",sans-serif';
     c.textAlign="left";  c.textBaseline="top";
-    c.fillText("SSR = "+fmt(F.ssr,1),L,B+8);
-    c.textAlign="right"; c.fillText("SSE = "+fmt(F.sse,1),R,B+8);
+    c.fillText("SST \u2212 SSE = "+fmt(F.sst-M.sse,1),L,B+8);
+    c.textAlign="right"; c.fillText("SSE = "+fmt(M.sse,1),R,B+8);
     c.textAlign="center"; c.fillText("total variation in y \u00b7 SST = "+fmt(F.sst,1),(L+R)/2,B+8);
   });
-  const ro4=readouts(lab4,[["r2","R\u00b2","samp"],["r","r \u00b7 correlation","sm"],
+  const ro4=readouts(lab4,[["r2","R\u00b2 of your line","samp"],
     ["see","standard error of the estimate","sm"],["mae","mean absolute error","sm"],
     ["sd","sd of y, for comparison","sm"]]);
   const errNote=el("p","labnote"); lab4.append(errNote);
   const figR=el("div","figwrap"); lab4.append(figR);
   const cvR=makeCanvas(figR,0.30,(c,W,H)=>{
     const F=fit(), x=F.x;
-    const res=x.map((v,i)=>Y[i]-(F.b0+F.b1*v));
+    const B=mine(), res=x.map((v,i)=>Y[i]-(B.b0+B.b1*v));
     const xlo=Math.min(...x), xhi=Math.max(...x);
     const m=Math.max(...res.map(Math.abs))*1.15;
     const px=(xhi-xlo)*0.06;
@@ -1030,24 +1061,32 @@ MODULES.push({
     const F=fit(), s=XS[xi];
     cv.render(); cvD.render(); cvV.render(); cvR.render(); excelTable(); quiz();
 
-    const B0=b0u==null?F.b0:b0u, B1=b1u==null?F.b1:b1u;
-    eqn.textContent="";
-    eqn.append(el("span","k","the fitted line"));
-    eqn.append(el("span","f","readmit_rate_pct = "+fmt(F.b0,3)+
-      (F.b1<0?" − ":" + ")+fmt(Math.abs(F.b1),s.dp===0?5:3)+" × "+s.k));
-    if(b0u!=null){
-      const mine=sseOf(B0,B1), best=F.sse;
-      sseNote.innerHTML="Your line leaves <b>SSE = "+fmt(mine,1)+"</b>. The least-squares line "+
-        "leaves <b>"+fmt(best,1)+"</b>"+(mine>best+0.05
-        ? " — "+fmt(mine-best,1)+" worse. Every other line you can draw is worse than that one; "+
-          "that is the whole definition of least squares."
-        : ". You have found it.")+" Snap back when you are done.";
-    }else{
-      sseNote.innerHTML="Those vertical orange segments are the residuals. The least-squares line is "+
-        "the one line that makes the <b>sum of their squares</b> as small as it can be — drag "+
-        "the sliders and watch SSE get worse whichever way you go.";
-    }
-
+    const M=myFit();
+    bigR.textContent=M.r2.toFixed(3);
+    const okFit=M.r2>0;
+    bigR.style.color=okFit?"var(--good)":"var(--bad)";
+    barIn.style.width=(Math.max(0,Math.min(1,M.r2))*100).toFixed(1)+"%";
+    barIn.style.background=okFit?"var(--good)":"var(--bad)";
+    bestLine.innerHTML=(best>-Infinity&&best>M.r2+1e-9)
+      ? "best you have reached: <b>"+best.toFixed(3)+"</b>" : "&nbsp;";
+    sideSt.eq.innerHTML=fmt(M.b0,2)+(M.b1<0?" − ":" + ")+
+      fmt(Math.abs(M.b1),s.dp===0?5:3)+"x";
+    sideSt.ssr.textContent=fmt(M.ssr,1);
+    sideSt.sse.textContent=fmt(M.sse,1);
+    sideSt.sst.textContent=fmt(F.sst,1);
+    sideSt.ssr.className="v sm "+(M.ssr>0?"sim":"bad");
+    hint.innerHTML = M.r2<=0
+      ? "<b>R² = "+M.r2.toFixed(3)+".</b> A flat line at the average of y scores exactly 0, "+
+        "and anything below that is doing worse than making no prediction at all. Tilt the line "+
+        "until those orange segments get shorter."
+      : M.r2<0.2
+      ? "<b>R² = "+M.r2.toFixed(3)+".</b> You are beating the average, but not by much. "+
+        "R² rises exactly when the sum of the squared orange segments falls."
+      : M.r2<0.4
+      ? "<b>R² = "+M.r2.toFixed(3)+".</b> Getting there. Move the height and the tilt one at "+
+        "a time rather than both at once."
+      : "<b>R² = "+M.r2.toFixed(3)+".</b> Close. Exactly one line cannot be beaten, and the "+
+        "sections below show what the software says it is — see how near you get first.";
     const per=s.dp===0?fmt(Math.abs(F.b1)*100,3):fmt(Math.abs(F.b1),3);
     const perTxt=s.dp===0?"100 more beds":("1 more "+s.unit);
     cardB1.innerHTML="<h4>The slope b₁ = "+fmt(F.b1,s.dp===0?5:3)+"</h4><p>"+
@@ -1086,10 +1125,9 @@ MODULES.push({
         "the interval: ["+fmt(F.lo,3)+", "+fmt(F.hi,3)+"] contains zero, which is the same finding "+
         "said more usefully — <b>the data cannot even pin down the sign.</b>";
 
-    ro4.r2.textContent=F.r2.toFixed(4);
-    ro4.r.textContent=fmt(F.r,4);
-    ro4.see.textContent=fmt(F.se_e,3)+" pts";
-    ro4.mae.textContent=fmt(F.mae,3)+" pts";
+    ro4.r2.textContent=M.r2.toFixed(4);
+    ro4.see.textContent=fmt(M.se,3)+" pts";
+    ro4.mae.textContent=fmt(M.mae,3)+" pts";
     ro4.sd.textContent=fmt(sdS(Y),3)+" pts";
     ro4.r2.className="v samp";
 
@@ -1107,8 +1145,18 @@ MODULES.push({
         "add them up and you have <b>SST = "+fmt(F.sst,1)+"</b> \u2014 how wrong you would be with "+
         "no predictor at all, just guessing "+fmt(myv,2)+"% for everyone. <b>That is the thing the "+
         "model has to beat.</b>"
+      : mode==="ssr"
+      ? "These segments run from <b>your line to the mean</b>: how far the model moved its "+
+        "prediction away from \u0233 for each hospital. Squared and added they give <b>SSR = "+
+        fmt(M.ssr,1)+"</b>."+(Math.abs(M.gap)<0.1
+          ? " And SSR + SSE = "+fmt(M.ssr,1)+" + "+fmt(M.sse,1)+" = "+fmt(M.ssr+M.sse,1)+
+            " = SST. <b>You have found the least-squares line</b> \u2014 that identity holds for "+
+            "that one line and no other."
+          : " Now add SSE: "+fmt(M.ssr,1)+" + "+fmt(M.sse,1)+" = "+fmt(M.ssr+M.sse,1)+
+            ", but SST is "+fmt(F.sst,1)+". <b>Those do not match.</b> SSR + SSE = SST is true "+
+            "for exactly one line \u2014 keep adjusting in step 1 and watch the two sides meet.")
       : mode==="line"
-      ? "Same hospitals, but now measured to <b>the fitted line</b>. Squared and added these give "+
+      ? "Same hospitals, but now measured to <b>your line</b>. Squared and added these give "+
         "<b>SSE = "+fmt(F.sse,1)+"</b>. Compare it with SST above: the line removed "+
         fmt(F.ssr,1)+" of the "+fmt(F.sst,1)+", and <b>that ratio is R\u00b2 = "+F.r2.toFixed(3)+
         "</b>. R\u00b2 is not a mysterious quantity \u2014 it is just how much better than the "+
@@ -1118,20 +1166,20 @@ MODULES.push({
         fmt(yh-myv,3)+" + ("+fmt(yi-yh,3)+") = "+fmt((yh-myv)+(yi-yh),3)+", exactly. Do that for all "+F.n+
         " hospitals, square every piece, and the three totals are SSR, SSE and SST. "+
         "<b>Click any other point, or drag the slider.</b>";
-    errNote.innerHTML="<b>R² = "+F.r2.toFixed(3)+"</b> says the line accounts for "+
-      (F.r2*100).toFixed(1)+"% of the variation in readmission rate. It has no units, so it "+
-      "cannot tell you whether the model is <i>useful</i>. For that read the <b>standard error of "+
-      "the estimate, "+fmt(F.se_e,2)+" percentage points</b> — that is the typical miss, in "+
-      "the units of the outcome. Compare it with the sd of y itself, "+fmt(sdS(Y),2)+
-      " points: a model only earns its keep when the first number is meaningfully below the second."+
-      " Mean absolute error, "+fmt(F.mae,2)+" points, says the same thing without squaring, so big "+
-      "misses count less.";
+    errNote.innerHTML="These numbers are for <b>your line</b>, not the software's. "+
+      "<b>R\u00b2 = "+M.r2.toFixed(3)+"</b> says it accounts for "+(M.r2*100).toFixed(1)+
+      "% of the variation in readmission rate \u2014 and R\u00b2 has no units, so it cannot tell "+
+      "you whether the model is <i>useful</i>. For that read the <b>standard error of the "+
+      "estimate, "+fmt(M.se,2)+" percentage points</b>: the typical miss, in the units of the "+
+      "outcome. Compare it with the sd of y itself, "+fmt(sdS(Y),2)+" points \u2014 a model only "+
+      "earns its keep when the first number is meaningfully below the second. Go back to step 1 "+
+      "and improve the line; every number on this page moves with it.";
     resNote.innerHTML="The residual plot is the assumption check. <b>You want a shapeless band "+
       "around zero.</b> A curve means a straight line was the wrong shape; a funnel that widens "+
       "means the spread of the errors is not constant, which makes the p-value and the interval "+
       "above untrustworthy even when the slope itself is fine.";
   }
-  go();
+  reset();
  }
 });
 </script>
